@@ -1,0 +1,44 @@
+name: Publish
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check if version is new
+        id: check
+        run: |
+          NAME=$(grep -m1 '^name' pyproject.toml | sed -E 's/.*"(.*)".*/\1/')
+          VERSION=$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"(.*)".*/\1/')
+          echo "version=$VERSION"
+          if curl -fsSL "https://pypi.org/pypi/$NAME/$VERSION/json" > /dev/null 2>&1; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+            echo "$NAME $VERSION already on PyPI, skipping"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install build tools
+        if: steps.check.outputs.new == 'true'
+        run: pip install build twine
+
+      - name: Build
+        if: steps.check.outputs.new == 'true'
+        run: python -m build
+
+      - name: Publish to PyPI
+        if: steps.check.outputs.new == 'true'
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: twine upload dist/*

@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llama-index-tools-scavio"
+version = "0.1.0"
+description = "Scavio real-time search tools (Google, Google News, Reddit, YouTube, Amazon) for LlamaIndex"
+readme = "README.md"
+requires-python = ">=3.10,<4.0"
+license = { text = "MIT" }
+authors = [{ name = "Scavio", email = "support@scavio.dev" }]
+keywords = [
+    "llama-index",
+    "llamaindex",
+    "scavio",
+    "search",
+    "serp",
+    "rag",
+    "tools",
+    "tavily-alternative",
+    "serpapi-alternative",
+]
+dependencies = [
+    "scavio>=0.5.0",
+    "llama-index-core>=0.13.0,<0.15",
+]
+
+[project.urls]
+Homepage = "https://scavio.dev"
+Repository = "https://github.com/scavio-ai/llamaindex-scavio"
+Documentation = "https://scavio.dev/docs/llamaindex"
+
+[project.optional-dependencies]
+test = ["pytest>=7.0", "responses>=0.24"]
+
+[tool.hatch.build.targets.sdist]
+include = ["llama_index/"]
+exclude = ["**/BUILD"]
+
+[tool.hatch.build.targets.wheel]
+include = ["llama_index/"]
+exclude = ["**/BUILD"]
+
+[tool.llamahub]
+contains_example = false
+import_path = "llama_index.tools.scavio"
+
+[tool.llamahub.class_authors]
+ScavioToolSpec = "scavio"
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that hit the live Scavio API (require SCAVIO_API_KEY)",
+]
