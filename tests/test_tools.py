@@ -140,6 +140,9 @@ def test_to_tool_list_exposes_all_functions(spec):
         "news",
         "reddit_search",
         "youtube_search",
+        "youtube_video",
+        "youtube_transcript",
+        "youtube_comments",
         "amazon_search",
     }
 

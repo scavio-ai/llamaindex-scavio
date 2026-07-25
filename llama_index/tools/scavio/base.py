@@ -43,6 +43,7 @@ def _records(resp: Dict[str, Any]) -> List[Any]:
             "results",
             "organic_results",
             "videos",
+            "comments",
             "news_results",
             "items",
         ):
@@ -130,6 +131,9 @@ class ScavioToolSpec(BaseToolSpec):
         "news",
         "reddit_search",
         "youtube_search",
+        "youtube_video",
+        "youtube_transcript",
+        "youtube_comments",
         "amazon_search",
     ]
 
@@ -212,17 +216,87 @@ class ScavioToolSpec(BaseToolSpec):
     def youtube_search(
         self,
         query: str,
+        upload_date: Optional[str] = None,
+        type: Optional[str] = None,
+        duration: Optional[str] = None,
+        sort_by: Optional[str] = None,
         max_results: Optional[int] = 10,
     ) -> List[Document]:
         """Search YouTube for videos, channels, or playlists.
 
         Args:
             query: The video search query.
+            upload_date: Upload date filter: last_hour, today, this_week, this_month, this_year.
+            type: Result type: video, channel, playlist, movie.
+            duration: Duration filter: short, medium, long.
+            sort_by: Sort order: relevance, date, view_count, rating.
             max_results: Maximum number of results to return.
 
         """
-        resp = self.client.youtube.search(query)
+        params: Dict[str, Any] = {
+            "upload_date": upload_date,
+            "type": type,
+            "duration": duration,
+            "sort_by": sort_by,
+        }
+        resp = self.client.youtube.search(
+            query, **{k: v for k, v in params.items() if v is not None}
+        )
         docs = _to_documents(resp, "youtube")
+        return docs[:max_results] if max_results else docs
+
+    def youtube_video(self, video_id: str) -> List[Document]:
+        """Fetch full details for a YouTube video (title, author, description, view count, chapters).
+
+        Args:
+            video_id: YouTube video id or a full watch URL.
+
+        """
+        resp = self.client.youtube.video(video_id)
+        return _to_documents(resp, "youtube_video")
+
+    def youtube_transcript(
+        self,
+        video_id: str,
+        language: Optional[str] = None,
+        format: Optional[str] = None,
+    ) -> List[Document]:
+        """Fetch a YouTube video's transcript as a Document ready for a RAG pipeline.
+
+        Args:
+            video_id: YouTube video id or a full watch URL.
+            language: Transcript language code (default 'en').
+            format: 'text' for a plain transcript, 'srt' for timed subtitles.
+
+        """
+        params: Dict[str, Any] = {"language": language, "format": format}
+        resp = self.client.youtube.transcript(
+            video_id, **{k: v for k, v in params.items() if v is not None}
+        )
+        payload = resp.get("data") if isinstance(resp.get("data"), dict) else resp
+        content = _flatten_text(payload.get("content")) if isinstance(payload, dict) else ""
+        if content:
+            extra = {"source": "youtube_transcript"}
+            vid = payload.get("video_id") if isinstance(payload, dict) else None
+            if vid:
+                extra["url"] = f"https://www.youtube.com/watch?v={vid}"
+            return [Document(text=content, extra_info=extra)]
+        return _to_documents(resp, "youtube_transcript")
+
+    def youtube_comments(
+        self,
+        video_id: str,
+        max_results: Optional[int] = 10,
+    ) -> List[Document]:
+        """List comments on a YouTube video as Documents.
+
+        Args:
+            video_id: YouTube video id or a full watch URL.
+            max_results: Maximum number of comments to return.
+
+        """
+        resp = self.client.youtube.comments(video_id)
+        docs = _to_documents(resp, "youtube_comments")
         return docs[:max_results] if max_results else docs
 
     def amazon_search(
