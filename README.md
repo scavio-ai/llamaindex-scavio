@@ -83,7 +83,7 @@ Need every endpoint (Walmart, TikTok, Instagram, Maps, Shopping, Trends, and mor
 
 ## Credits
 
-Most calls cost 1 credit; Reddit costs 2. See [scavio.dev/docs](https://scavio.dev/docs).
+Most calls cost 1 credit; Instagram costs 8-10. See [scavio.dev/docs](https://scavio.dev/docs).
 
 ## About Scavio
 
