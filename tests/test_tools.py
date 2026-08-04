@@ -117,6 +117,68 @@ def spec():
     return tool_spec
 
 
+# --- curated-surface guards ------------------------------------------------
+
+CURATED_TOOLS = [
+    "search",
+    "news",
+    "reddit_search",
+    "youtube_search",
+    "youtube_video",
+    "youtube_transcript",
+    "youtube_comments",
+    "amazon_search",
+]
+
+
+def test_surface_is_exactly_eight_tools():
+    """This spec is curated by design: 8 endpoints over Google, Reddit, YouTube, Amazon.
+
+    Guards the README's counts. A new tool here means the README table, the platform
+    counts and the credit table all need updating in the same change.
+    """
+    assert ScavioToolSpec.spec_functions == CURATED_TOOLS
+    assert len(ScavioToolSpec.spec_functions) == 8
+    assert all(callable(getattr(ScavioToolSpec, name)) for name in CURATED_TOOLS)
+
+
+def test_to_tool_list_exposes_the_same_eight(spec):
+    """to_tool_list is what an agent actually sees; it must match spec_functions."""
+    assert [t.metadata.name for t in spec.to_tool_list()] == CURATED_TOOLS
+
+
+def test_uncovered_platforms_are_absent(spec):
+    """Walmart, TikTok, TikTok Shop, Instagram, X and LinkedIn are not exposed here."""
+    for absent in ("walmart", "tiktok", "tiktok_shop", "instagram", "x_", "linkedin"):
+        assert not any(name.startswith(absent) for name in ScavioToolSpec.spec_functions)
+
+
+def test_deprecated_youtube_metadata_alias_not_exposed():
+    """/youtube/metadata is a deprecated alias of /youtube/video, not a peer tool."""
+    assert "youtube_metadata" not in ScavioToolSpec.spec_functions
+    assert "youtube_video" in ScavioToolSpec.spec_functions
+
+
+def test_every_tool_has_a_docstring():
+    """Agent-facing tools are selected off their docstrings; none may be blank."""
+    for name in ScavioToolSpec.spec_functions:
+        doc = getattr(ScavioToolSpec, name).__doc__
+        assert doc and doc.strip(), name
+
+
+def test_google_tools_use_v2_vocabulary(spec):
+    """/api/v1/google is retired (410). Only gl/hl reach the SDK, never v1 params."""
+    spec.search("openai", gl="us", hl="en")
+    assert spec.client.calls[-1] == ("search", ("openai",), {"gl": "us", "hl": "en"})
+    spec.news("openai", gl="us")
+    assert spec.client.calls[-1] == ("news", (), {"query": "openai", "gl": "us"})
+    import inspect
+
+    for name in ("search", "news"):
+        params = set(inspect.signature(getattr(ScavioToolSpec, name)).parameters)
+        assert not params & {"light_request", "country_code", "language", "search_type", "page"}
+
+
 # --- helper unit tests -----------------------------------------------------
 
 def test_records_google_top_level():
