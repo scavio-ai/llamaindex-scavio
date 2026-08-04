@@ -24,14 +24,14 @@ from llama_index.core.tools.tool_spec.base import BaseToolSpec
 def _records(resp: Dict[str, Any]) -> List[Any]:
     """Pull the most relevant list of items out of a Scavio response.
 
-    Scavio returns different shapes per endpoint (Google SERP puts organic
+    Scavio returns different shapes per endpoint (Google v2 puts organic
     results at the top level; Amazon/Reddit/YouTube nest them under ``data``),
     so probe the known keys in priority order.
     """
     if not isinstance(resp, dict):
         return []
-    # Top-level result lists (Google SERP full mode uses organic_results;
-    # light mode uses results; News uses news_results).
+    # Top-level result lists (Google v2 SERP uses organic_results;
+    # News uses news_results).
     for key in ("results", "organic_results", "news_results"):
         if isinstance(resp.get(key), list) and resp[key]:
             return resp[key]
@@ -104,12 +104,13 @@ def _to_documents(resp: Dict[str, Any], source: str) -> List[Document]:
     for record in records:
         if isinstance(record, dict):
             title = _flatten_text(record.get("title") or record.get("name") or "")
+            # Reddit post bodies come back as `text` (not Reddit's own
+            # `selftext`); Google v2 uses `snippet`.
             body = _flatten_text(
                 record.get("description")
                 or record.get("snippet")
                 or record.get("text")
                 or record.get("content")
-                or record.get("selftext")
                 or ""
             )
             text = f"{title}\n{body}".strip() or json.dumps(record, ensure_ascii=False)[:2000]
@@ -195,18 +196,20 @@ class ScavioToolSpec(BaseToolSpec):
     def reddit_search(
         self,
         query: str,
-        sort: Optional[str] = None,
+        cursor: Optional[str] = None,
         max_results: Optional[int] = 10,
     ) -> List[Document]:
         """Search Reddit posts for community discussion and sentiment.
 
+        Results are relevance-ordered and cannot be sorted or filtered by type.
+
         Args:
             query: The Reddit search query.
-            sort: Sort order: new, relevance, hot, top, or comments.
+            cursor: Pagination cursor: the next_cursor of a previous response.
             max_results: Maximum number of results to return.
 
         """
-        params: Dict[str, Any] = {"sort": sort}
+        params: Dict[str, Any] = {"cursor": cursor}
         resp = self.client.reddit.search(
             query, **{k: v for k, v in params.items() if v is not None}
         )
@@ -302,18 +305,22 @@ class ScavioToolSpec(BaseToolSpec):
     def amazon_search(
         self,
         query: str,
-        domain: Optional[str] = None,
+        country: Optional[str] = None,
         max_results: Optional[int] = 10,
     ) -> List[Document]:
         """Search Amazon for products matching a query.
 
+        Results are unsorted and cannot be filtered.
+
         Args:
             query: The product search query.
-            domain: Amazon domain, e.g. 'amazon.com'.
+            country: Marketplace country code (ISO 3166-1 alpha-2), not a
+                domain: 'us' (default), 'gb' (the UK is gb, not uk), 'de', 'jp'.
+                An unknown code falls back to 'us'.
             max_results: Maximum number of results to return.
 
         """
-        params: Dict[str, Any] = {"domain": domain}
+        params: Dict[str, Any] = {"country": country}
         resp = self.client.amazon.search(
             query, **{k: v for k, v in params.items() if v is not None}
         )

@@ -18,49 +18,84 @@ MOCK_API_KEY = "sk_live_test_key_12345"
 
 # --- response fixtures (mirror the real Scavio wire shapes) ----------------
 
+# Google v2 (/api/v2/google): flat response, organic_results with link/snippet.
 GOOGLE_RESPONSE = {
-    "query": "openai",
+    "search_parameters": {"q": "openai"},
     "credits_used": 1,
-    "results": [
+    "organic_results": [
         {
             "title": f"Result {i}",
-            "url": f"https://example.com/{i}",
-            "description": f"Description {i}",
+            "link": f"https://example.com/{i}",
+            "snippet": f"Description {i}",
             "position": i,
         }
         for i in range(1, 13)
     ],
 }
 
+# YouTube search (/api/v1/youtube/search): 2 credits, results under data.
+YOUTUBE_RESPONSE = {
+    "data": {
+        "results": [
+            {
+                "videoId": f"vid{i}",
+                "title": {"runs": [{"text": f"Result {i}"}]},
+                "description": f"Description {i}",
+            }
+            for i in range(1, 13)
+        ]
+    },
+    "credits_used": 2,
+}
+
 AMAZON_RESPONSE = {
     "data": {
         "page": 1,
         "products": [
-            {"asin": f"B00{i}", "title": f"Product {i}", "url": f"/dp/B00{i}"}
+            {
+                "asin": f"B00{i}",
+                "title": f"Product {i}",
+                "url": f"/dp/B00{i}",
+                "image": f"https://m.media-amazon.com/images/I/{i}.jpg",
+            }
             for i in range(1, 6)
         ],
     },
     "credits_used": 1,
 }
 
+# Reddit search (/api/v1/reddit/search): 1 credit since Reddit moved to TikHub.
+# data.results (not data.posts) of flat post objects keyed `text` (not selftext).
 REDDIT_RESPONSE = {
     "data": {
-        "posts": [
-            {"title": f"Post {i}", "permalink": f"https://reddit.com/r/x/{i}",
-             "selftext": f"body {i}"}
+        "results": [
+            {
+                "post_id": f"t3_abc{i}",
+                "title": f"Post {i}",
+                "url": f"https://www.reddit.com/r/x/comments/abc{i}/post_{i}/",
+                "text": f"body {i}",
+                "subreddit": "x",
+                "author": f"user{i}",
+                "score": i * 10,
+                "num_comments": i,
+            }
             for i in range(1, 4)
-        ]
+        ],
+        "next_cursor": "t3_abc3",
+        "has_more": True,
     },
-    "credits_used": 2,
+    "credits_used": 1,
 }
 
 
 class _FakeNamespace:
-    def __init__(self, response):
+    def __init__(self, response, calls=None):
         self._response = response
+        self._calls = calls if calls is not None else []
 
-    def __getattr__(self, _name):
-        def _call(*_args, **_kwargs):
+    def __getattr__(self, name):
+        def _call(*args, **kwargs):
+            self._calls.append((name, args, kwargs))
             return self._response
 
         return _call
@@ -68,10 +103,11 @@ class _FakeNamespace:
 
 class _FakeClient:
     def __init__(self):
-        self.google = _FakeNamespace(GOOGLE_RESPONSE)
-        self.amazon = _FakeNamespace(AMAZON_RESPONSE)
-        self.reddit = _FakeNamespace(REDDIT_RESPONSE)
-        self.youtube = _FakeNamespace(GOOGLE_RESPONSE)
+        self.calls = []
+        self.google = _FakeNamespace(GOOGLE_RESPONSE, self.calls)
+        self.amazon = _FakeNamespace(AMAZON_RESPONSE, self.calls)
+        self.reddit = _FakeNamespace(REDDIT_RESPONSE, self.calls)
+        self.youtube = _FakeNamespace(YOUTUBE_RESPONSE, self.calls)
 
 
 @pytest.fixture()
@@ -91,7 +127,8 @@ def test_records_amazon_nested():
     assert len(_records(AMAZON_RESPONSE)) == 5
 
 
-def test_records_reddit_nested_posts():
+def test_records_reddit_nested_results():
+    """Reddit search nests its posts under data.results, not data.posts."""
     assert len(_records(REDDIT_RESPONSE)) == 3
 
 
@@ -126,10 +163,32 @@ def test_amazon_search_uses_nested_products(spec):
     assert "Product 1" in docs[0].text
 
 
-def test_reddit_search_uses_permalink(spec):
+def test_amazon_search_sends_country_not_domain(spec):
+    """The marketplace param is country (a 2-letter code), never domain."""
+    spec.amazon_search("laptop", country="gb")
+    assert spec.client.calls[-1] == ("search", ("laptop",), {"country": "gb"})
+
+
+def test_reddit_search_reads_flat_post_objects(spec):
     docs = spec.reddit_search("best search api")
-    assert docs[0].metadata["url"].startswith("https://reddit.com/")
+    assert docs[0].metadata["url"].startswith("https://www.reddit.com/")
     assert docs[0].metadata["source"] == "reddit"
+    assert "body 1" in docs[0].text
+
+
+def test_reddit_search_only_sends_query_and_cursor(spec):
+    """/reddit/search takes query + cursor only; sort and type do not exist."""
+    spec.reddit_search("best search api", cursor="t3_abc3")
+    assert spec.client.calls[-1] == ("search", ("best search api",), {"cursor": "t3_abc3"})
+
+
+def test_reddit_search_signature_has_no_sort_or_type():
+    import inspect
+
+    params = inspect.signature(ScavioToolSpec.reddit_search).parameters
+    assert "sort" not in params
+    assert "type" not in params
+    assert "cursor" in params
 
 
 def test_to_tool_list_exposes_all_functions(spec):
@@ -149,8 +208,8 @@ def test_to_tool_list_exposes_all_functions(spec):
 
 # --- real wire-shape regression tests (offline) ----------------------------
 
-# Google full mode: organic_results at top level with link/snippet keys.
-GOOGLE_FULL_RESPONSE = {
+# Google v2: organic_results at top level with link/snippet keys.
+GOOGLE_V2_RESPONSE = {
     "search_parameters": {"q": "coffee"},
     "organic_results": [
         {"position": 1, "title": "Best Coffee", "link": "https://x.com/a", "snippet": "great"},
@@ -159,7 +218,7 @@ GOOGLE_FULL_RESPONSE = {
     "credits_used": 1,
 }
 
-# YouTube: data.results with rich-text title and videoId (no url).
+# YouTube search: data.results with rich-text title and videoId (no url). 2 credits.
 YOUTUBE_REAL_RESPONSE = {
     "data": {
         "results": [
@@ -169,24 +228,32 @@ YOUTUBE_REAL_RESPONSE = {
             }
         ]
     },
-    "credits_used": 1,
+    "credits_used": 2,
 }
 
-# Amazon: data.products with relative url + asin.
+# Amazon: data.products with relative url + asin, image (not url_image).
 AMAZON_REAL_RESPONSE = {
     "data": {
-        "products": [{"asin": "B088NRLMPV", "title": "Anker Cable", "url": "/Anker/dp/B088NRLMPV/ref=sr"}]
+        "products": [
+            {
+                "asin": "B088NRLMPV",
+                "title": "Anker Cable",
+                "url": "/Anker/dp/B088NRLMPV/ref=sr",
+                "image": "https://m.media-amazon.com/images/I/61.jpg",
+                "badge": "Amazon's Choice",
+            }
+        ]
     },
     "credits_used": 1,
 }
 
 
-def test_records_google_full_organic_results():
-    assert len(_records(GOOGLE_FULL_RESPONSE)) == 2
+def test_records_google_v2_organic_results():
+    assert len(_records(GOOGLE_V2_RESPONSE)) == 2
 
 
-def test_documents_google_full_uses_link_and_snippet():
-    docs = _to_documents(GOOGLE_FULL_RESPONSE, "google")
+def test_documents_google_v2_uses_link_and_snippet():
+    docs = _to_documents(GOOGLE_V2_RESPONSE, "google")
     assert docs[0].metadata["url"] == "https://x.com/a"
     assert "great" in docs[0].text
 
@@ -212,6 +279,42 @@ def test_documents_youtube_real_shape():
 def test_documents_amazon_real_shape():
     docs = _to_documents(AMAZON_REAL_RESPONSE, "amazon")
     assert docs[0].metadata["url"] == "https://www.amazon.com/dp/B088NRLMPV"
+
+
+# --- YouTube tool tests ----------------------------------------------------
+
+def test_youtube_search_returns_documents(spec):
+    docs = spec.youtube_search("langchain", max_results=3)
+    assert len(docs) == 3
+    assert docs[0].metadata["source"] == "youtube"
+    assert docs[0].metadata["url"] == "https://www.youtube.com/watch?v=vid1"
+
+
+def test_youtube_video_returns_documents(spec):
+    docs = spec.youtube_video("aywZrzNaKjs")
+    assert docs[0].metadata["source"] == "youtube_video"
+
+
+def test_youtube_comments_respects_max_results(spec):
+    assert len(spec.youtube_comments("aywZrzNaKjs", max_results=2)) == 2
+
+
+def test_youtube_transcript_returns_single_document(spec):
+    spec.client.youtube = _FakeNamespace(
+        {
+            "data": {
+                "video_id": "aywZrzNaKjs",
+                "language": "en",
+                "content": "hello world transcript",
+            },
+            "credits_used": 8,
+        },
+        spec.client.calls,
+    )
+    docs = spec.youtube_transcript("aywZrzNaKjs")
+    assert len(docs) == 1
+    assert docs[0].text == "hello world transcript"
+    assert docs[0].metadata["url"] == "https://www.youtube.com/watch?v=aywZrzNaKjs"
 
 
 # --- live integration tests (require SCAVIO_API_KEY) -----------------------
