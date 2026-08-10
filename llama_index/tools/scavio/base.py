@@ -1,8 +1,9 @@
 """Scavio tool spec for LlamaIndex.
 
 Wraps the Scavio real-time search API (Google, Google News, Reddit, YouTube,
-Amazon) and exposes each provider as a LlamaIndex agent tool that returns
-``Document`` objects ready to drop into a RAG pipeline or an agent.
+Amazon) plus ``extract``, which reads any URL, and exposes each one as a
+LlamaIndex agent tool that returns ``Document`` objects ready to drop into a
+RAG pipeline or an agent.
 
     from llama_index.tools.scavio import ScavioToolSpec
 
@@ -124,8 +125,31 @@ def _to_documents(resp: Dict[str, Any], source: str) -> List[Document]:
     return docs
 
 
+def _extract_document(resp: Dict[str, Any], requested_url: str) -> List[Document]:
+    """Build a single ``Document`` from an ``/api/v1/extract`` response.
+
+    Extract is the one endpoint here that returns page CONTENT rather than a
+    list of records, so ``_to_documents`` is the wrong shape for it: there is no
+    result array to iterate, and its JSON fallback would truncate the page to
+    8000 characters. ``youtube_transcript`` special-cases its content string the
+    same way. Falls back to ``_to_documents`` only if the content field is
+    missing, so an unexpected shape still reaches the caller instead of
+    vanishing.
+    """
+    payload = resp.get("data") if isinstance(resp.get("data"), dict) else resp
+    content = payload.get("content") if isinstance(payload, dict) else None
+    if not isinstance(content, str) or not content:
+        return _to_documents(resp, "extract")
+    extra: Dict[str, Any] = {"source": "extract", "url": payload.get("url") or requested_url}
+    for key in ("format", "mode", "content_length"):
+        value = payload.get(key)
+        if value is not None:
+            extra[key] = value
+    return [Document(text=content, extra_info=extra)]
+
+
 class ScavioToolSpec(BaseToolSpec):
-    """Scavio tool spec: real-time search across Google, Reddit, YouTube, Amazon."""
+    """Scavio tool spec: real-time search across Google, Reddit, YouTube, Amazon, plus URL extraction."""
 
     spec_functions = [
         "search",
@@ -136,6 +160,7 @@ class ScavioToolSpec(BaseToolSpec):
         "youtube_transcript",
         "youtube_comments",
         "amazon_search",
+        "extract",
     ]
 
     def __init__(self, api_key: Optional[str] = None) -> None:
@@ -326,3 +351,33 @@ class ScavioToolSpec(BaseToolSpec):
         )
         docs = _to_documents(resp, "amazon")
         return docs[:max_results] if max_results else docs
+
+    def extract(
+        self,
+        url: str,
+        format: Optional[str] = None,
+        mode: Optional[str] = None,
+    ) -> List[Document]:
+        """Read any web page and return it as one Document ready for a RAG pipeline.
+
+        Use this after a search to read the page behind a result, or on any URL
+        the user names. Returns a single Document holding the whole page, not a
+        list of records.
+
+        Args:
+            url: Page to read (1-2048 characters). http(s) only; a bare host is
+                upgraded to https, and loopback, private, link-local and
+                metadata hosts are rejected.
+            format: 'markdown' (default) is a readability extraction with the
+                page chrome stripped, 'text' is that flattened to plain text,
+                'html' is the raw page.
+            mode: Fetch tier, and the parameter that sets the price: 'normal'
+                (default) is a plain fetch and costs 1 credit, 'advanced'
+                renders the page in a browser for JS-built sites and costs 1,
+                'ultra' routes through residential proxies for the hardest bot
+                walls and costs 2. Start on 'normal'.
+
+        """
+        params: Dict[str, Any] = {"format": format, "mode": mode}
+        resp = self.client.extract(url, **{k: v for k, v in params.items() if v is not None})
+        return _extract_document(resp, url)

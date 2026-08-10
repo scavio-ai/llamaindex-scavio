@@ -11,7 +11,13 @@ import pytest
 from llama_index.core.schema import Document
 
 from llama_index.tools.scavio import ScavioToolSpec
-from llama_index.tools.scavio.base import _flatten_text, _records, _to_documents, _url_of
+from llama_index.tools.scavio.base import (
+    _extract_document,
+    _flatten_text,
+    _records,
+    _to_documents,
+    _url_of,
+)
 
 MOCK_API_KEY = "sk_live_test_key_12345"
 
@@ -88,6 +94,23 @@ REDDIT_RESPONSE = {
 }
 
 
+# Extract (/api/v1/extract): a CORE endpoint, not a platform. It returns page
+# content under `data`, with no result list to iterate, and is tier-priced by
+# `mode` (normal 1, advanced 1, ultra 2) rather than a flat per-call constant.
+EXTRACT_RESPONSE = {
+    "data": {
+        "url": "https://example.com/pricing",
+        "format": "markdown",
+        "mode": "normal",
+        "content": "# Pricing\n\nStarts at $9 a month.",
+        "content_length": 31,
+    },
+    "response_time": 812,
+    "credits_used": 1,
+    "credits_remaining": 4999,
+}
+
+
 class _FakeNamespace:
     def __init__(self, response, calls=None):
         self._response = response
@@ -108,6 +131,14 @@ class _FakeClient:
         self.amazon = _FakeNamespace(AMAZON_RESPONSE, self.calls)
         self.reddit = _FakeNamespace(REDDIT_RESPONSE, self.calls)
         self.youtube = _FakeNamespace(YOUTUBE_RESPONSE, self.calls)
+        self.extract_response = EXTRACT_RESPONSE
+
+    # extract is a TOP-LEVEL method on the client, never a namespace, so it is
+    # a plain method here rather than a _FakeNamespace. A tool that called
+    # client.extract.extract() would fail against this fake, which is the point.
+    def extract(self, url, **kwargs):
+        self.calls.append(("extract", (url,), kwargs))
+        return self.extract_response
 
 
 @pytest.fixture()
@@ -128,21 +159,22 @@ CURATED_TOOLS = [
     "youtube_transcript",
     "youtube_comments",
     "amazon_search",
+    "extract",
 ]
 
 
-def test_surface_is_exactly_eight_tools():
-    """This spec is curated by design: 8 endpoints over Google, Reddit, YouTube, Amazon.
+def test_surface_is_exactly_nine_tools():
+    """Curated by design: 8 endpoints over Google, Reddit, YouTube, Amazon, plus extract.
 
     Guards the README's counts. A new tool here means the README table, the platform
     counts and the credit table all need updating in the same change.
     """
     assert ScavioToolSpec.spec_functions == CURATED_TOOLS
-    assert len(ScavioToolSpec.spec_functions) == 8
+    assert len(ScavioToolSpec.spec_functions) == 9
     assert all(callable(getattr(ScavioToolSpec, name)) for name in CURATED_TOOLS)
 
 
-def test_to_tool_list_exposes_the_same_eight(spec):
+def test_to_tool_list_exposes_the_same_nine(spec):
     """to_tool_list is what an agent actually sees; it must match spec_functions."""
     assert [t.metadata.name for t in spec.to_tool_list()] == CURATED_TOOLS
 
@@ -265,7 +297,64 @@ def test_to_tool_list_exposes_all_functions(spec):
         "youtube_transcript",
         "youtube_comments",
         "amazon_search",
+        "extract",
     }
+
+
+# --- extract tests ---------------------------------------------------------
+
+def test_extract_returns_one_document_with_the_whole_page(spec):
+    """Extract returns CONTENT, not a record list: one Document holding the page."""
+    docs = spec.extract("https://example.com/pricing")
+    assert len(docs) == 1
+    assert docs[0].text == "# Pricing\n\nStarts at $9 a month."
+    assert docs[0].metadata["source"] == "extract"
+    assert docs[0].metadata["url"] == "https://example.com/pricing"
+    assert docs[0].metadata["format"] == "markdown"
+    assert docs[0].metadata["mode"] == "normal"
+
+
+def test_extract_is_a_top_level_method_not_a_namespace(spec):
+    """scavio.extract(url), never scavio.extract.extract()."""
+    spec.extract("https://example.com/pricing")
+    assert spec.client.calls[-1] == ("extract", ("https://example.com/pricing",), {})
+
+
+def test_extract_sends_format_and_mode_and_drops_none(spec):
+    spec.extract("https://example.com", format="text", mode="ultra")
+    assert spec.client.calls[-1] == (
+        "extract",
+        ("https://example.com",),
+        {"format": "text", "mode": "ultra"},
+    )
+    spec.extract("https://example.com", mode="advanced")
+    assert spec.client.calls[-1] == ("extract", ("https://example.com",), {"mode": "advanced"})
+
+
+def test_extract_signature_offers_only_url_format_mode():
+    """The route takes url, format and mode; anything else is stripped server-side."""
+    import inspect
+
+    params = inspect.signature(ScavioToolSpec.extract).parameters
+    assert set(params) == {"self", "url", "format", "mode"}
+
+
+def test_extract_document_falls_back_when_content_is_missing():
+    """An unexpected shape must still reach the caller rather than vanish."""
+    docs = _extract_document({"weird": "shape"}, "https://example.com")
+    assert len(docs) == 1
+    assert "weird" in docs[0].text
+    assert docs[0].metadata["source"] == "extract"
+
+
+def test_extract_document_does_not_truncate_a_long_page():
+    """_to_documents caps its JSON fallback at 8000 chars; a real page must survive whole."""
+    body = "x" * 50_000
+    docs = _extract_document(
+        {"data": {"url": "https://example.com", "content": body, "content_length": len(body)}},
+        "https://example.com",
+    )
+    assert len(docs[0].text) == 50_000
 
 
 # --- real wire-shape regression tests (offline) ----------------------------

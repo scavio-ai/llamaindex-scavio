@@ -26,7 +26,13 @@ def main() -> None:
     for doc in docs[:3]:
         print("  -", doc.text.split("\n")[0][:80], "|", doc.metadata.get("url"))
 
-    # 2. Optional: hand the tools to a LlamaIndex agent.
+    # 2. Read the page behind the top result (1 credit on the default tier).
+    if docs and docs[0].metadata.get("url"):
+        page = tool_spec.extract(docs[0].metadata["url"])
+        print(f"\nExtract returned {len(page[0].text)} characters of markdown:")
+        print("  ", page[0].text[:200].replace("\n", " "))
+
+    # 3. Optional: hand the tools to a LlamaIndex agent.
     if os.getenv("OPENAI_API_KEY"):
         from llama_index.core.agent.workflow import FunctionAgent
         from llama_index.llms.openai import OpenAI
