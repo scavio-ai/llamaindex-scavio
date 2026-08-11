@@ -70,7 +70,7 @@ AMAZON_RESPONSE = {
     "credits_used": 1,
 }
 
-# Reddit search (/api/v1/reddit/search): 1 credit since Reddit moved to TikHub.
+# Reddit search (/api/v1/reddit/search): 1 credit since Reddit changed upstream source.
 # data.results (not data.posts) of flat post objects keyed `text` (not selftext).
 REDDIT_RESPONSE = {
     "data": {
