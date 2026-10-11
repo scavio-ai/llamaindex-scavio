@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llama-index-tools-scavio"
-version = "0.2.0"
-description = "Scavio real-time search and URL extraction tools (Google, Google News, Reddit, YouTube, Amazon, extract) for LlamaIndex"
+version = "0.3.0"
+description = "Scavio real-time search and URL extraction tools (Google, Google News, Reddit, YouTube, Amazon, extract, website map, crawl and batch) for LlamaIndex"
 readme = "README.md"
 requires-python = ">=3.10,<4.0"
 license = { text = "MIT" }
@@ -20,11 +20,13 @@ keywords = [
     "tools",
     "tavily-alternative",
     "extract",
+    "web-crawler",
+    "sitemap",
     "web-scraping",
     "serpapi-alternative",
 ]
 dependencies = [
-    "scavio>=0.15.0",
+    "scavio>=0.23.0",
     "llama-index-core>=0.13.0,<0.15",
 ]
 

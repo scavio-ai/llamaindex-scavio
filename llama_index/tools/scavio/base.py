@@ -3,11 +3,14 @@
 Wraps the Scavio real-time search API (Google, Google News, Reddit, YouTube,
 Amazon) plus ``extract``, which reads any URL, and exposes each one as a
 LlamaIndex agent tool that returns ``Document`` objects ready to drop into a
-RAG pipeline or an agent.
+RAG pipeline or an agent. ``enable_crawl=True`` adds the multi-page members of
+the Extract family: map a site's URLs, crawl a site, and batch-extract a list
+of URLs.
 
     from llama_index.tools.scavio import ScavioToolSpec
 
     tools = ScavioToolSpec(api_key="sk_...").to_tool_list()
+    crawl_tools = ScavioToolSpec(enable_crawl=True).to_tool_list()
 
 The API key falls back to the ``SCAVIO_API_KEY`` environment variable.
 """
@@ -16,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 from llama_index.core.schema import Document
@@ -148,6 +152,76 @@ def _extract_document(resp: Dict[str, Any], requested_url: str) -> List[Document
     return [Document(text=content, extra_info=extra)]
 
 
+# Crawl and batch run as background jobs. The tools start the job, then poll
+# its (free) status until it finishes or the wait budget runs out.
+JOB_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+JOB_POLL_INTERVAL = 3.0
+JOB_MAX_WAIT = 300
+JOB_DEFAULT_WAIT = 45
+JOB_DEFAULT_LIMIT = 10
+_JOB_SUMMARY_KEYS = (
+    "id",
+    "type",
+    "status",
+    "stopped_reason",
+    "error",
+    "url",
+    "pages",
+    "credits_used",
+    "credits_per_page",
+    "expires_at",
+    "next_cursor",
+    "urls_count",
+    "invalid_urls",
+)
+
+
+def _clean(params: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in params.items() if v is not None}
+
+
+def _map_document(resp: Dict[str, Any], requested_url: str) -> List[Document]:
+    """One Document listing a site's URLs, one per line, with the counts as metadata."""
+    data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+    links = data.get("links") if isinstance(data.get("links"), list) else []
+    urls = [link.get("url") for link in links if isinstance(link, dict) and link.get("url")]
+    extra: Dict[str, Any] = {"source": "extract_map", "url": data.get("url") or requested_url}
+    for key in ("total_found", "returned", "truncated", "sitemaps_read"):
+        if data.get(key) is not None:
+            extra[key] = data[key]
+    text = "\n".join(urls) if urls else json.dumps(resp, ensure_ascii=False)[:8000]
+    return [Document(text=text, extra_info=extra)]
+
+
+def _job_documents(resp: Dict[str, Any], kind: str) -> List[Document]:
+    """A job summary Document first, then one Document per returned page.
+
+    The summary carries the job id, status, page counts, credits and
+    ``next_cursor``, so an agent can read further pages (or a job that is still
+    running) with the matching status tool.
+    """
+    data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+    summary = {k: data[k] for k in _JOB_SUMMARY_KEYS if k in data}
+    docs = [
+        Document(
+            text=json.dumps(summary, ensure_ascii=False),
+            extra_info={"source": f"extract_{kind}_job", "job_id": data.get("id"), "status": data.get("status")},
+        )
+    ]
+    results = data.get("results") if isinstance(data.get("results"), list) else []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        extra: Dict[str, Any] = {"source": f"extract_{kind}", "job_id": data.get("id")}
+        for key in ("url", "status", "depth", "status_code", "content_length", "truncated", "error", "skip_reason", "credits"):
+            if result.get(key) is not None:
+                extra[key] = result[key]
+        content = result.get("content")
+        text = content if isinstance(content, str) and content else json.dumps(extra, ensure_ascii=False)
+        docs.append(Document(text=text, extra_info=extra))
+    return docs
+
+
 class ScavioToolSpec(BaseToolSpec):
     """Scavio tool spec: real-time search across Google, Reddit, YouTube, Amazon, plus URL extraction."""
 
@@ -163,8 +237,27 @@ class ScavioToolSpec(BaseToolSpec):
         "extract",
     ]
 
-    def __init__(self, api_key: Optional[str] = None) -> None:
-        """Initialize with a Scavio API key (or the SCAVIO_API_KEY env var)."""
+    # Opt-in: the multi-page Extract tools. They can bill per page, so they are
+    # off unless enable_crawl=True.
+    crawl_functions = [
+        "map_website",
+        "crawl_website",
+        "crawl_status",
+        "batch_extract",
+        "batch_status",
+    ]
+
+    def __init__(self, api_key: Optional[str] = None, enable_crawl: bool = False) -> None:
+        """Initialize with a Scavio API key (or the SCAVIO_API_KEY env var).
+
+        Args:
+            api_key: Scavio API key. Falls back to SCAVIO_API_KEY.
+            enable_crawl: Also expose map_website, crawl_website, crawl_status,
+                batch_extract and batch_status.
+
+        """
+        if enable_crawl:
+            self.spec_functions = [*type(self).spec_functions, *self.crawl_functions]
         try:
             from scavio import ScavioClient
         except ImportError as exc:  # pragma: no cover
@@ -372,12 +465,219 @@ class ScavioToolSpec(BaseToolSpec):
                 page chrome stripped, 'text' is that flattened to plain text,
                 'html' is the raw page.
             mode: Fetch tier, and the parameter that sets the price: 'normal'
-                (default) is a plain fetch and costs 1 credit, 'advanced'
-                renders the page in a browser for JS-built sites and costs 1,
-                'ultra' routes through residential proxies for the hardest bot
-                walls and costs 2. Start on 'normal'.
+                (default) is the standard fetch and costs 1 credit, 'advanced'
+                renders JavaScript-built pages and costs 1, 'ultra' reaches the
+                hardest pages and costs 2. Start on 'normal'.
 
         """
         params: Dict[str, Any] = {"format": format, "mode": mode}
         resp = self.client.extract(url, **{k: v for k, v in params.items() if v is not None})
         return _extract_document(resp, url)
+
+    # -- map, crawl and batch (enable_crawl=True) ---------------------------
+
+    def map_website(
+        self,
+        url: str,
+        search: Optional[str] = None,
+        limit: Optional[int] = None,
+        sitemap: Optional[str] = None,
+        include_subdomains: Optional[bool] = None,
+        include_paths: Optional[List[str]] = None,
+        exclude_paths: Optional[List[str]] = None,
+        ignore_query_parameters: Optional[bool] = None,
+        mode: Optional[str] = None,
+    ) -> List[Document]:
+        """List a website's page URLs from its sitemaps and start page, deduplicated and filtered.
+
+        Use it to find the right pages before extracting or crawling them. Pages
+        the site's robots.txt disallows are left out. Returns one Document whose
+        text is the URLs, one per line, with total_found, returned and truncated
+        in its metadata. Costs 1 credit in normal mode; advanced costs up to 2
+        and ultra up to 10, priced by what the call needed.
+
+        Args:
+            url: The site to map. A bare host is upgraded to https.
+            search: Only return URLs containing every word of this text.
+            limit: Maximum links to return, 1-5000. Default 1000 (or the plan's
+                limit if lower: Free 500, PAYG 1,000, paid plans 5,000).
+            sitemap: 'include' (default) combines the site's sitemaps with the
+                start page's links, 'only' uses sitemaps alone, 'skip' page links alone.
+            include_subdomains: Also return URLs on subdomains. Default false.
+            include_paths: Path globs to keep, e.g. ["/blog/**"] (max 20).
+            exclude_paths: Path globs to drop (max 20).
+            ignore_query_parameters: Treat URLs differing only by query string
+                as one URL. Default true.
+            mode: 'normal' is the standard fetch, 'advanced' renders
+                JavaScript-built pages, 'ultra' reaches the hardest pages.
+
+        """
+        params = _clean(
+            {
+                "search": search,
+                "limit": limit,
+                "sitemap": sitemap,
+                "include_subdomains": include_subdomains,
+                "include_paths": include_paths,
+                "exclude_paths": exclude_paths,
+                "ignore_query_parameters": ignore_query_parameters,
+                "mode": mode,
+            }
+        )
+        return _map_document(self.client.extract.map(url, **params), url)
+
+    def crawl_website(
+        self,
+        url: str,
+        max_pages: Optional[int] = None,
+        max_depth: Optional[int] = None,
+        include_paths: Optional[List[str]] = None,
+        exclude_paths: Optional[List[str]] = None,
+        allow_subdomains: Optional[bool] = None,
+        sitemap: Optional[str] = None,
+        format: Optional[str] = None,
+        mode: Optional[str] = None,
+        wait_seconds: int = JOB_DEFAULT_WAIT,
+        limit: int = JOB_DEFAULT_LIMIT,
+    ) -> List[Document]:
+        """Crawl a website from one URL and return its pages as Documents.
+
+        Same-site pages are discovered and extracted breadth-first within the
+        page, depth and path limits; robots.txt is obeyed. Starts the crawl and
+        waits up to wait_seconds for it to finish. The first Document is the job
+        summary (id, status, pages, credits_used, next_cursor); each further
+        Document is one page. If status is still queued or running, call
+        crawl_status with the id later. Billed per SUCCESSFUL page at extract's
+        price for the mode: normal and advanced 1 credit, ultra 2 credits.
+        Failed and skipped pages are free, and the crawl stops cleanly if the
+        balance runs out.
+
+        Args:
+            url: Where the crawl starts. Only pages on the same site are crawled.
+            max_pages: Maximum pages to fetch. Default 100. Plan limits: Free 10,
+                PAYG 100, Project 500, Bootstrap 2,000, Startup 5,000, Growth 10,000.
+            max_depth: Links away from the start page to follow, 0-10 (default 3).
+            include_paths: Path globs to crawl, e.g. ["/docs/**"] (max 20).
+            exclude_paths: Path globs to skip (max 20).
+            allow_subdomains: Also crawl subdomains. Default false.
+            sitemap: 'include' (default) also starts from the sitemap, 'skip'
+                follows links only, 'only' fetches sitemap pages without following links.
+            format: 'markdown' (default), 'text' or 'html' for each page.
+            mode: 'normal' is the standard fetch, 'advanced' renders
+                JavaScript-built pages, 'ultra' reaches the hardest pages.
+            wait_seconds: Seconds to wait for the crawl to finish, 0-300
+                (default 45). 0 returns the job id at once.
+            limit: Pages returned in this response, 1-100 (default 10).
+
+        """
+        body = _clean(
+            {
+                "max_pages": max_pages,
+                "max_depth": max_depth,
+                "include_paths": include_paths,
+                "exclude_paths": exclude_paths,
+                "allow_subdomains": allow_subdomains,
+                "sitemap": sitemap,
+                "format": format,
+                "mode": mode,
+            }
+        )
+        created = self.client.extract.crawl(url, **body)
+        return _job_documents(self._wait("crawl", created, wait_seconds, limit), "crawl")
+
+    def crawl_status(
+        self,
+        id: str,
+        cursor: Optional[str] = None,
+        limit: int = JOB_DEFAULT_LIMIT,
+        status: Optional[str] = None,
+        include_content: Optional[bool] = None,
+    ) -> List[Document]:
+        """Read a crawl's progress and its pages by job id, paged by cursor. Free.
+
+        Returns the job summary Document (status, pages, credits_used,
+        next_cursor) followed by one Document per page. Results are kept for 3
+        days after the crawl finishes.
+
+        Args:
+            id: The crawl's job id.
+            cursor: next_cursor from the previous response.
+            limit: Pages per response, 1-100 (default 10).
+            status: Only pages with this status: succeeded, failed or skipped.
+            include_content: False lists pages without their content.
+
+        """
+        params = _clean({"cursor": cursor, "limit": limit, "status": status, "include_content": include_content})
+        return _job_documents(self.client.extract.crawl_status(id, **params), "crawl")
+
+    def batch_extract(
+        self,
+        urls: List[str],
+        format: Optional[str] = None,
+        mode: Optional[str] = None,
+        wait_seconds: int = JOB_DEFAULT_WAIT,
+        limit: int = JOB_DEFAULT_LIMIT,
+    ) -> List[Document]:
+        """Extract a list of URLs in one job, each page returned as a Document.
+
+        Starts the batch and waits up to wait_seconds for it to finish. The first
+        Document is the job summary (id, status, pages, credits_used,
+        next_cursor); each further Document is one page, in input order. If
+        status is still queued or running, call batch_status with the id later.
+        Billed per SUCCESSFUL page at extract's price for the mode: normal and
+        advanced 1 credit, ultra 2 credits. Failed pages are free.
+
+        Args:
+            urls: The pages to extract. Plan limits: Free 10, PAYG 50, Project
+                100, Bootstrap 500, Startup and Growth 1,000.
+            format: 'markdown' (default), 'text' or 'html' for each page.
+            mode: 'normal' is the standard fetch, 'advanced' renders
+                JavaScript-built pages, 'ultra' reaches the hardest pages.
+            wait_seconds: Seconds to wait for the batch to finish, 0-300
+                (default 45). 0 returns the job id at once.
+            limit: Pages returned in this response, 1-100 (default 10).
+
+        """
+        created = self.client.extract.batch(urls, **_clean({"format": format, "mode": mode}))
+        return _job_documents(self._wait("batch", created, wait_seconds, limit), "batch")
+
+    def batch_status(
+        self,
+        id: str,
+        cursor: Optional[str] = None,
+        limit: int = JOB_DEFAULT_LIMIT,
+        status: Optional[str] = None,
+        include_content: Optional[bool] = None,
+    ) -> List[Document]:
+        """Read a batch's progress and its pages by job id, paged by cursor. Free.
+
+        Returns the job summary Document followed by one Document per page, in
+        input order. Results are kept for 3 days after the batch finishes.
+
+        Args:
+            id: The batch's job id.
+            cursor: next_cursor from the previous response.
+            limit: Pages per response, 1-100 (default 10).
+            status: Only pages with this status: succeeded, failed or skipped.
+            include_content: False lists pages without their content.
+
+        """
+        params = _clean({"cursor": cursor, "limit": limit, "status": status, "include_content": include_content})
+        return _job_documents(self.client.extract.batch_status(id, **params), "batch")
+
+    def _wait(self, kind: str, created: Dict[str, Any], wait_seconds: int, limit: int) -> Dict[str, Any]:
+        """Poll a started job until it finishes or the wait runs out, then read its results."""
+        job_id = (created.get("data") or {}).get("id")
+        if not job_id or wait_seconds <= 0:
+            return created
+        status_fn = self.client.extract.crawl_status if kind == "crawl" else self.client.extract.batch_status
+        deadline = time.monotonic() + min(wait_seconds, JOB_MAX_WAIT)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(JOB_POLL_INTERVAL, remaining))
+            probe = status_fn(job_id, limit=1, include_content=False)
+            if (probe.get("data") or {}).get("status") in JOB_TERMINAL_STATUSES:
+                break
+        return status_fn(job_id, limit=limit)

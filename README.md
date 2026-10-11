@@ -4,7 +4,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/llama-index-tools-scavio.svg)](https://pypi.org/project/llama-index-tools-scavio/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-[Scavio](https://scavio.dev) real-time search and page-extraction tools for [LlamaIndex](https://www.llamaindex.ai/) — Google, Google News, Reddit, YouTube, Amazon, and `extract` (read any URL) as clean `Document`s, with one API key. A drop-in [Tavily alternative](https://scavio.dev/docs) and [SerpAPI alternative](https://scavio.dev/docs) for LlamaIndex RAG pipelines and agents.
+[Scavio](https://scavio.dev) real-time search and page-extraction tools for [LlamaIndex](https://www.llamaindex.ai/) — Google, Google News, Reddit, YouTube, Amazon, and `extract` (read any URL) as clean `Document`s, plus opt-in tools to map a site's URLs, crawl a whole site, and batch-extract a URL list, with one API key. A drop-in [Tavily alternative](https://scavio.dev/docs) and [SerpAPI alternative](https://scavio.dev/docs) for LlamaIndex RAG pipelines and agents.
 
 ## Install
 
@@ -47,9 +47,41 @@ agent = FunctionAgent(
 response = await agent.run("What are people on Reddit saying about Tavily alternatives?")
 ```
 
+## Map, crawl and batch (opt-in)
+
+`ScavioToolSpec(enable_crawl=True)` adds five tools for whole sites. They are off by default because crawl and batch bill per page, so an existing tool list is unchanged until you opt in.
+
+| Tool | Endpoint | What it returns | Credits |
+|---|---|---|---|
+| `map_website` | `POST /api/v1/extract/map` | One Document: the site's page URLs, one per line, from its sitemaps and start page; `total_found` / `truncated` in metadata | 1 on `normal` (up to 2 on `advanced`, up to 10 on `ultra`) |
+| `crawl_website` | `POST /api/v1/extract/crawl` | A job-summary Document, then one Document per page | per successful page: 1 / 1 / 2 by `mode` |
+| `crawl_status` | `GET /api/v1/extract/crawl/{id}` | The same, for a crawl that outlived the wait or the next `cursor` page | free |
+| `batch_extract` | `POST /api/v1/extract/batch` | A job-summary Document, then one Document per URL, in input order | per successful page: 1 / 1 / 2 by `mode` |
+| `batch_status` | `GET /api/v1/extract/batch/{id}` | The same, for a batch | free |
+
+Crawl and batch run as background jobs. `crawl_website` and `batch_extract` start the job and **wait up to `wait_seconds` (default 45, max 300)** for it to finish, then return the job summary (`id`, `status`, `pages`, `credits_used`, `next_cursor`) as the first Document and up to `limit` pages (default 10) after it. A job still `queued` or `running` when the wait ends keeps going; read the rest with `crawl_status` / `batch_status` and its `id`. That keeps an agent step bounded while a large crawl (up to 6 hours) runs on.
+
+```python
+import json
+
+tool_spec = ScavioToolSpec(enable_crawl=True)
+
+urls = tool_spec.map_website("https://hono.dev/docs", limit=50)[0].text.splitlines()
+
+docs = tool_spec.crawl_website("https://hono.dev/docs", max_pages=25, include_paths=["/docs/**"])
+job = json.loads(docs[0].text)        # {"id", "status", "pages", "credits_used", "next_cursor", ...}
+pages = docs[1:]                      # one Document per page, metadata url/status/depth
+if job["next_cursor"]:
+    more = tool_spec.crawl_status(job["id"], cursor=job["next_cursor"])
+
+batch = tool_spec.batch_extract(["https://example.com/", "https://hono.dev/docs/getting-started/basic"])
+```
+
+Crawl and batch bill **per successful page** at extract's price for the mode (normal and advanced 1 credit, ultra 2); failed and skipped pages are free, and a job stops cleanly with `stopped_reason: "insufficient_credits"` if the balance runs out. Reading a job is free. Crawl and map obey the site's robots.txt and stay on the start site (subdomains optional); results are kept for 3 days. Plan limits (pages per crawl / active jobs / URLs per batch): Free 10/1/10, PAYG 100/1/50, Project 500/2/100, Bootstrap 2,000/3/500, Startup 5,000/5/1,000, Growth 10,000/10/1,000. Cancellation, webhooks and idempotency keys exist on the [REST API](https://scavio.dev/docs/extract) and in the `scavio` SDK (`client.extract.cancel_crawl(...)`), but are not agent tools here.
+
 ## Scope: 9 endpoints, by design
 
-`ScavioToolSpec` is a **curated subset** of the Scavio API, not a wrapper around all of it. It exposes **9** of Scavio's 195 endpoints — 8 across **4** of its 31 platforms, plus the core `extract` endpoint — the ones that map cleanly onto RAG `Document`s (every function returns `List[Document]`):
+`ScavioToolSpec` is a **curated subset** of the Scavio API, not a wrapper around all of it. By default it exposes **9** of Scavio's 195 endpoints (plus the five opt-in map/crawl/batch tools above) — 8 across **4** of its 31 platforms, plus the core `extract` endpoint — the ones that map cleanly onto RAG `Document`s (every function returns `List[Document]`):
 
 | Tool | Endpoint | Platform | What it does | Credits |
 |---|---|---|---|---|
@@ -123,8 +155,11 @@ In `ScavioToolSpec`: Google SERP, Google News, Reddit, YouTube, Amazon search, a
 | `youtube_search` | 2 |
 | `youtube_transcript` | 8 |
 | `extract` | **1** on `mode="normal"`, **1** on `"advanced"`, **2** on `"ultra"` |
+| `map_website` *(opt-in)* | **1** on `normal`; up to 2 on `advanced`, up to 10 on `ultra` |
+| `crawl_website`, `batch_extract` *(opt-in)* | per successful page: **1** on `normal` or `advanced`, **2** on `ultra` |
+| `crawl_status`, `batch_status` *(opt-in)* | free |
 
-`extract` bills only on a successful read: a dead link, a bot wall or a timeout costs nothing. Start on `normal`; move to `advanced` when the page builds its content in the browser, and to `ultra` only when a bot wall blocks the other two.
+`extract` bills only on a successful read: a dead link, a bot wall or a timeout costs nothing. Start on `normal`; move to `advanced` when the page builds its content with JavaScript, and to `ultra` only for the hardest pages.
 
 Elsewhere in the API (not exposed here): YouTube streams 3, Instagram 2-10, LinkedIn 1-10 with a job at 30, Kuaishou 1-40 per endpoint, G2 5, Capterra 2, everything else 1. New accounts get 50 one-time signup credits — no monthly refill. See [scavio.dev/docs](https://scavio.dev/docs) and [the extract docs](https://scavio.dev/docs/extract).
 

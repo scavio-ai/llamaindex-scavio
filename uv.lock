@@ -798,7 +798,7 @@ wheels = [
 
 [[package]]
 name = "llama-index-tools-scavio"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "llama-index-core" },
@@ -816,7 +816,7 @@ requires-dist = [
     { name = "llama-index-core", specifier = ">=0.13.0,<0.15" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0" },
     { name = "responses", marker = "extra == 'test'", specifier = ">=0.24" },
-    { name = "scavio", specifier = ">=0.15.0" },
+    { name = "scavio", specifier = ">=0.23.0" },
 ]
 provides-extras = ["test"]
 
@@ -1952,15 +1952,15 @@ wheels = [
 
 [[package]]
 name = "scavio"
-version = "0.15.0"
+version = "0.23.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f1/2a/bac8443c428bcc9e95d402f5136eaaef143564f02436755efabedfb8a4a3/scavio-0.15.0.tar.gz", hash = "sha256:29d4f98d898d066c2b2f09aacea8b8345613b6b587f47ecb97c06574eed1e4a6", size = 158891, upload-time = "2026-08-10T18:02:00.092Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/80/44/7d833545b605c330cda75fa52626671cb4ee0168adc48df3404726f54525/scavio-0.23.0.tar.gz", hash = "sha256:18b56aa1e549c921aeca4f068bb9bc3466383acaa01697bc34b790522d562236", size = 235464, upload-time = "2026-10-11T23:06:52.412Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e1/96/62ae355a54027a5237a47775fc13c057d4e8e7edf4f7aaea96aba5cadf24/scavio-0.15.0-py3-none-any.whl", hash = "sha256:4e8c838a9b5259caed92884c96f4cdecd89c5cff95581ef9b9f2fed31c593f20", size = 141840, upload-time = "2026-08-10T18:01:58.911Z" },
+    { url = "https://files.pythonhosted.org/packages/28/52/3004fa5dbfa83fd393f11627d2f2f9c983a2b28bb108906e815d96f8e71c/scavio-0.23.0-py3-none-any.whl", hash = "sha256:894002aa7b4798f335127b6ad93cb0ed2b6cbbc60f3078557fda0ed539e49f00", size = 198991, upload-time = "2026-10-11T23:06:50.87Z" },
 ]
 
 [[package]]
