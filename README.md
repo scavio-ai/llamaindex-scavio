@@ -90,7 +90,7 @@ Crawl and batch bill **per successful page** at extract's price for the mode (no
 | `reddit_search` | `POST /api/v1/reddit/search` | Reddit | Community discussion and sentiment | 1 |
 | `youtube_search` | `POST /api/v1/youtube/search` | YouTube | Videos, channels, playlists | 2 |
 | `youtube_video` | `POST /api/v1/youtube/video` | YouTube | Full details for one video | 1 |
-| `youtube_transcript` | `POST /api/v1/youtube/transcript` | YouTube | Transcript or timed subtitles | 8 |
+| `youtube_transcript` | `POST /api/v1/youtube/transcript` | YouTube | Transcript or timed subtitles | 5 |
 | `youtube_comments` | `POST /api/v1/youtube/comments` | YouTube | Top-level comments on a video | 1 |
 | `amazon_search` | `POST /api/v1/amazon/search` | Amazon | Product listings | 1 |
 | `extract` | `POST /api/v1/extract` | *(core, not a platform)* | Any URL as Markdown, plain text, or raw HTML | 1 / 1 / 2 by `mode` |
@@ -147,13 +147,13 @@ In `ScavioToolSpec`: Google SERP, Google News, Reddit, YouTube, Amazon search, a
 
 ## Credits
 
-**This package is not flat 1 credit.** Six of the nine tools cost 1, `youtube_search` costs 2, `youtube_transcript` costs **8** — budget for it if you are bulk-ingesting transcripts into an index — and `extract` is priced by the tier you ask for, not per call.
+**This package is not flat 1 credit.** Six of the nine tools cost 1, `youtube_search` costs 2, `youtube_transcript` costs **5** — budget for it if you are bulk-ingesting transcripts into an index — and `extract` is priced by the tier you ask for, not per call.
 
 | Tool | Credits |
 |---|---|
 | `search`, `news`, `reddit_search`, `youtube_video`, `youtube_comments`, `amazon_search` | 1 |
 | `youtube_search` | 2 |
-| `youtube_transcript` | 8 |
+| `youtube_transcript` | 5 |
 | `extract` | **1** on `mode="normal"`, **1** on `"advanced"`, **2** on `"ultra"` |
 | `map_website` *(opt-in)* | **1** on `normal`; up to 2 on `advanced`, up to 10 on `ultra` |
 | `crawl_website`, `batch_extract` *(opt-in)* | per successful page: **1** on `normal` or `advanced`, **2** on `ultra` |
