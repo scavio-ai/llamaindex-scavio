@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llama-index-tools-scavio"
-version = "0.3.1"
+version = "0.3.2"
 description = "Scavio real-time search and URL extraction tools (Google, Google News, Reddit, YouTube, Amazon, extract, website map, crawl and batch) for LlamaIndex"
 readme = "README.md"
 requires-python = ">=3.10,<4.0"

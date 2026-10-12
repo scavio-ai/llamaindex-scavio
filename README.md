@@ -161,7 +161,7 @@ In `ScavioToolSpec`: Google SERP, Google News, Reddit, YouTube, Amazon search, a
 
 `extract` bills only on a successful read: a dead link, a bot wall or a timeout costs nothing. Start on `normal`; move to `advanced` when the page builds its content with JavaScript, and to `ultra` only for the hardest pages.
 
-Elsewhere in the API (not exposed here): YouTube streams 3, Instagram 2-10, LinkedIn 1-10 with a job at 30, Kuaishou 1-40 per endpoint, G2 5, Capterra 2, everything else 1. New accounts get 50 one-time signup credits — no monthly refill. See [scavio.dev/docs](https://scavio.dev/docs) and [the extract docs](https://scavio.dev/docs/extract).
+Elsewhere in the API (not exposed here): YouTube streams 3, Instagram 1-2 (up to 10), LinkedIn 1-10 with a job at 30, Kuaishou 1-40 per endpoint, G2 5, Capterra 2, everything else 1. New accounts get 50 one-time signup credits — no monthly refill. See [scavio.dev/docs](https://scavio.dev/docs) and [the extract docs](https://scavio.dev/docs/extract).
 
 ## About Scavio
 
