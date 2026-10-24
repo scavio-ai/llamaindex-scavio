@@ -235,6 +235,11 @@ class ScavioToolSpec(BaseToolSpec):
         "youtube_comments",
         "amazon_search",
         "extract",
+        "heb_search",
+        "heb_product",
+        "heb_stores",
+        "kroger_search",
+        "kroger_product",
     ]
 
     # Opt-in: the multi-page Extract tools. They can bill per page, so they are
@@ -473,6 +478,124 @@ class ScavioToolSpec(BaseToolSpec):
         params: Dict[str, Any] = {"format": format, "mode": mode}
         resp = self.client.extract(url, **{k: v for k, v in params.items() if v is not None})
         return _extract_document(resp, url)
+
+    # -- HEB and Kroger grocery tools ------------------------------------------
+
+    def heb_search(
+        self,
+        query: str,
+        page: Optional[int] = None,
+        page_size: Optional[int] = None,
+        max_results: Optional[int] = 10,
+    ) -> List[Document]:
+        """Search HEB grocery products by keyword.
+
+        Returns price (cents), sale status, unit price, size, UPC, stock,
+        EBT/SNAP eligibility, aisle location and product URL. Costs 2 credits.
+
+        Args:
+            query: Search keywords (1-200 characters).
+            page: Results page, 1-based (1-100).
+            page_size: Results per page (1-60; server default 30).
+            max_results: Maximum number of results to return.
+
+        """
+        params: Dict[str, Any] = {"page": page, "page_size": page_size}
+        resp = self.client.heb.search(
+            query, **{k: v for k, v in params.items() if v is not None}
+        )
+        docs = _to_documents(resp, "heb")
+        return docs[:max_results] if max_results else docs
+
+    def heb_product(
+        self,
+        product_url: Optional[str] = None,
+        product_id: Optional[str] = None,
+        slug: Optional[str] = None,
+    ) -> List[Document]:
+        """Fetch full HEB product detail.
+
+        Nutrition facts, ingredients, description, images, similar products,
+        coupons, EBT/SNAP eligibility and breadcrumbs. Pass product_url (from
+        search) or slug + product_id. Costs 2 credits.
+
+        Args:
+            product_url: Full or relative product URL from heb.com. Preferred.
+            product_id: HEB product id (numeric id at the end of a product URL). Requires slug.
+            slug: Product slug (readable part of the URL). Required with product_id.
+
+        """
+        params: Dict[str, Any] = {"product_url": product_url, "product_id": product_id, "slug": slug}
+        resp = self.client.heb.product(**{k: v for k, v in params.items() if v is not None})
+        return _to_documents(resp, "heb_product")
+
+    def heb_stores(
+        self,
+        zip: Optional[str] = None,
+        city: Optional[str] = None,
+    ) -> List[Document]:
+        """Find HEB stores near a US ZIP code or city.
+
+        Returns store number, address, phone, hours, pharmacy availability,
+        fulfillment channels, distance and store URL. Costs 2 credits.
+
+        Args:
+            zip: 5-digit US ZIP code (e.g. '78701').
+            city: City name (e.g. 'Austin'). Pass zip or city.
+
+        """
+        params: Dict[str, Any] = {"zip": zip, "city": city}
+        resp = self.client.heb.stores(**{k: v for k, v in params.items() if v is not None})
+        return _to_documents(resp, "heb_stores")
+
+    def kroger_search(
+        self,
+        query: str,
+        page: Optional[int] = None,
+        max_results: Optional[int] = 10,
+    ) -> List[Document]:
+        """Search Kroger grocery products by keyword.
+
+        Returns price (cents), promo/n-for deals, unit price, UPC, stock,
+        SNAP eligibility, dietary info, rating and category. Kroger operates
+        Kroger, Ralphs, Fred Meyer, Harris Teeter, King Soopers, Fry's and
+        other banners. Costs 2 credits.
+
+        Args:
+            query: Search keywords (1-200 characters).
+            page: Results page, 1-based (1-100).
+            max_results: Maximum number of results to return.
+
+        """
+        params: Dict[str, Any] = {"page": page}
+        resp = self.client.kroger.search(
+            query, **{k: v for k, v in params.items() if v is not None}
+        )
+        docs = _to_documents(resp, "kroger")
+        return docs[:max_results] if max_results else docs
+
+    def kroger_product(
+        self,
+        product_url: Optional[str] = None,
+        upc: Optional[str] = None,
+        slug: Optional[str] = None,
+    ) -> List[Document]:
+        """Fetch full Kroger product detail.
+
+        Nutrition facts with allergens and ingredients, rating distribution,
+        store aisle location, dietary flags, SNAP eligibility, dimensions and
+        country of origin. Pass product_url (from search) or upc. Costs 2
+        credits.
+
+        Args:
+            product_url: Full or relative product URL from kroger.com. Preferred.
+            upc: Kroger product UPC (from search or product URLs).
+            slug: Product slug for readable URL. Optional with upc.
+
+        """
+        params: Dict[str, Any] = {"product_url": product_url, "upc": upc, "slug": slug}
+        resp = self.client.kroger.product(**{k: v for k, v in params.items() if v is not None})
+        return _to_documents(resp, "kroger_product")
 
     # -- map, crawl and batch (enable_crawl=True) ---------------------------
 
