@@ -240,6 +240,8 @@ class ScavioToolSpec(BaseToolSpec):
         "heb_stores",
         "kroger_search",
         "kroger_product",
+        "decathlon_search",
+        "decathlon_product",
     ]
 
     # Opt-in: the multi-page Extract tools. They can bill per page, so they are
@@ -596,6 +598,56 @@ class ScavioToolSpec(BaseToolSpec):
         params: Dict[str, Any] = {"product_url": product_url, "upc": upc, "slug": slug}
         resp = self.client.kroger.product(**{k: v for k, v in params.items() if v is not None})
         return _to_documents(resp, "kroger_product")
+
+    def decathlon_search(
+        self,
+        query: str,
+        country: str,
+        page: Optional[int] = None,
+        max_results: Optional[int] = 10,
+    ) -> List[Document]:
+        """Search Decathlon products by keyword.
+
+        Supports 7 country domains: FR, ES, IT, IN, UK, PT and NET
+        (international). Returns product name, brand, price (cents), currency,
+        availability, rating, review count and image. Costs 2 credits.
+
+        Args:
+            query: Search keywords (1-200 characters).
+            country: Country domain: 'fr', 'es', 'it', 'in', 'uk', 'pt' or 'net'.
+            page: Results page, 1-based (1-50).
+            max_results: Maximum number of results to return.
+
+        """
+        params: Dict[str, Any] = {"page": page}
+        resp = self.client.decathlon.search(
+            query, country=country, **{k: v for k, v in params.items() if v is not None}
+        )
+        docs = _to_documents(resp, "decathlon")
+        return docs[:max_results] if max_results else docs
+
+    def decathlon_product(
+        self,
+        country: str,
+        product_url: Optional[str] = None,
+        product_id: Optional[str] = None,
+    ) -> List[Document]:
+        """Fetch full Decathlon product detail.
+
+        Description, images, SKU, GTIN, color, price (cents), list price,
+        availability, offers/variants, rating, review count, category and
+        breadcrumbs. Pass product_url (from search) or product_id. Costs 2
+        credits.
+
+        Args:
+            country: Country domain: 'fr', 'es', 'it', 'in', 'uk', 'pt' or 'net'.
+            product_url: Full or relative product URL from any Decathlon domain. Preferred.
+            product_id: Decathlon numeric product ID.
+
+        """
+        params: Dict[str, Any] = {"product_url": product_url, "product_id": product_id}
+        resp = self.client.decathlon.product(country=country, **{k: v for k, v in params.items() if v is not None})
+        return _to_documents(resp, "decathlon_product")
 
     # -- map, crawl and batch (enable_crawl=True) ---------------------------
 
