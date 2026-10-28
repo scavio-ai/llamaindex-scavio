@@ -129,6 +129,17 @@ def _to_documents(resp: Dict[str, Any], source: str) -> List[Document]:
     return docs
 
 
+def _with_heb_store(docs: List[Document], resp: Dict[str, Any]) -> List[Document]:
+    """Copy the HEB store echo (``data.store``) into each Document's metadata."""
+    data = resp.get("data") if isinstance(resp, dict) else None
+    store = data.get("store") if isinstance(data, dict) else None
+    if isinstance(store, dict):
+        for doc in docs:
+            doc.metadata["store_id"] = store.get("store_id")
+            doc.metadata["store_name"] = store.get("name")
+    return docs
+
+
 def _extract_document(resp: Dict[str, Any], requested_url: str) -> List[Document]:
     """Build a single ``Document`` from an ``/api/v1/extract`` response.
 
@@ -488,25 +499,31 @@ class ScavioToolSpec(BaseToolSpec):
         query: str,
         page: Optional[int] = None,
         page_size: Optional[int] = None,
+        store_id: Optional[str] = None,
         max_results: Optional[int] = 10,
     ) -> List[Document]:
         """Search HEB grocery products by keyword.
 
         Returns price (cents), sale status, unit price, size, UPC, stock,
-        EBT/SNAP eligibility, aisle location and product URL. Costs 2 credits.
+        EBT/SNAP eligibility, aisle location and product URL. Pass store_id
+        for one store's prices, stock and assortment. Costs 2 credits.
 
         Args:
             query: Search keywords (1-200 characters).
             page: Results page, 1-based (1-100).
-            page_size: Results per page (1-60; server default 30).
+            page_size: Results per page, 1-60. Defaults to 60.
+            store_id: HEB store number from heb_stores (store_number). Prices, stock,
+                aisle location and assortment come from that store; the store used
+                is echoed in data.store and in each Document's metadata. US only.
+                Omit for HEB's default store.
             max_results: Maximum number of results to return.
 
         """
-        params: Dict[str, Any] = {"page": page, "page_size": page_size}
+        params: Dict[str, Any] = {"page": page, "page_size": page_size, "store_id": store_id}
         resp = self.client.heb.search(
             query, **{k: v for k, v in params.items() if v is not None}
         )
-        docs = _to_documents(resp, "heb")
+        docs = _with_heb_store(_to_documents(resp, "heb"), resp)
         return docs[:max_results] if max_results else docs
 
     def heb_product(
@@ -514,22 +531,33 @@ class ScavioToolSpec(BaseToolSpec):
         product_url: Optional[str] = None,
         product_id: Optional[str] = None,
         slug: Optional[str] = None,
+        store_id: Optional[str] = None,
     ) -> List[Document]:
         """Fetch full HEB product detail.
 
         Nutrition facts, ingredients, description, images, similar products,
         coupons, EBT/SNAP eligibility and breadcrumbs. Pass product_url (from
-        search) or slug + product_id. Costs 2 credits.
+        search) or slug + product_id. With store_id the price, stock and aisle
+        location are that store's and product_id alone is enough. Costs 2 credits.
 
         Args:
             product_url: Full or relative product URL from heb.com. Preferred.
-            product_id: HEB product id (numeric id at the end of a product URL). Requires slug.
-            slug: Product slug (readable part of the URL). Required with product_id.
+            product_id: HEB product id. Needs slug, unless store_id is set (then product_id alone works).
+            slug: Product slug (readable part of the URL). Required with product_id unless store_id is set.
+            store_id: HEB store number from heb_stores (store_number). Prices, stock,
+                aisle location and assortment come from that store; the store used
+                is echoed in data.store and in each Document's metadata. US only.
+                Omit for HEB's default store.
 
         """
-        params: Dict[str, Any] = {"product_url": product_url, "product_id": product_id, "slug": slug}
+        params: Dict[str, Any] = {
+            "product_url": product_url,
+            "product_id": product_id,
+            "slug": slug,
+            "store_id": store_id,
+        }
         resp = self.client.heb.product(**{k: v for k, v in params.items() if v is not None})
-        return _to_documents(resp, "heb_product")
+        return _with_heb_store(_to_documents(resp, "heb_product"), resp)
 
     def heb_stores(
         self,

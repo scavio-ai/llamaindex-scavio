@@ -640,3 +640,33 @@ def test_crawl_docstrings_state_price_and_never_the_fetch_method():
         assert "credit" in doc or "free" in doc, name
         for word in banned:
             assert word not in doc, (name, word)
+
+
+HEB_STORE_RESPONSE = {
+    "data": {
+        "query": "whole milk",
+        "count": 1,
+        "store": {"store_id": "441", "name": "Uvalde H-E-B"},
+        "products": [
+            {
+                "id": "314130",
+                "name": "H-E-B Whole Milk, 1 gal",
+                "url": "https://www.heb.com/product-detail/h-e-b-whole-milk-1-gal/314130",
+                "price": 398,
+            }
+        ],
+    },
+    "credits_used": 2,
+    "credits_remaining": 100,
+}
+
+
+def test_heb_store_id_is_forwarded_and_echoed(spec):
+    spec.client.heb = _FakeNamespace(HEB_STORE_RESPONSE, spec.client.calls)
+    docs = spec.heb_search("whole milk", store_id="441")
+    assert spec.client.calls[-1] == ("search", ("whole milk",), {"store_id": "441"})
+    assert docs[0].metadata["store_id"] == "441"
+    assert docs[0].metadata["store_name"] == "Uvalde H-E-B"
+
+    spec.heb_product(product_id="314130", store_id="441")
+    assert spec.client.calls[-1] == ("product", (), {"product_id": "314130", "store_id": "441"})
